@@ -1,0 +1,77 @@
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+  max-http-request-header-size: 16KB
+spring:
+  application:
+    name: pharmacy
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:55432/pharmacy}
+    username: ${DB_USER:pharmacy}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 12
+      connection-timeout: 5000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      connect-timeout: 200ms
+      timeout: 200ms
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    username: ${RABBITMQ_USER:pharmacy}
+    password: ${RABBITMQ_PASSWORD:}
+    connection-timeout: 1s
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+    listener:
+      simple:
+        auto-startup: ${MESSAGING_ENABLED:false}
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          max-attempts: 3
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+management:
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+  endpoint:
+    health:
+      group:
+        readiness:
+          include: readinessState,db
+      probes:
+        enabled: true
+      show-details: never
+  health:
+    redis:
+      enabled: ${REDIS_ENABLED:false}
+    rabbit:
+      enabled: ${MESSAGING_ENABLED:false}
+logging:
+  structured:
+    format:
+      console: logstash
+app:
+  redis-enabled: ${REDIS_ENABLED:false}
+  messaging-enabled: ${MESSAGING_ENABLED:false}
+  seed-demo: ${SEED_DEMO:false}
+  owner-email: ${OWNER_EMAIL:owner@pharmacy.local}
+  owner-password: ${OWNER_PASSWORD:}

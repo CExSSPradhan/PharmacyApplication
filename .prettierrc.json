@@ -1,0 +1,1 @@
+{"singleQuote":true,"trailingComma":"all","printWidth":100,"tabWidth":2,"overrides":[{"files":"*.java","options":{"plugins":["./frontend/node_modules/prettier-plugin-java/dist/index.mjs"],"parser":"java"}}]}

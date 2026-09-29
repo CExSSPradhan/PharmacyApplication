@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+scripts/setup-local
+[[ -d frontend/node_modules ]] || scripts/npm ci
+scripts/start-backend &
+BACKEND_PID=$!
+scripts/npm run dev &
+FRONTEND_PID=$!
+cleanup() { kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true; }
+trap cleanup EXIT INT TERM
+echo 'Frontend: http://localhost:5173 — backend: http://localhost:8080'
+wait

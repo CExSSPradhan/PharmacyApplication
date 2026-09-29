@@ -1,0 +1,99 @@
+CREATE TABLE users (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  email VARCHAR(150) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  role VARCHAR(20) NOT NULL CHECK (role IN ('OWNER','CASHIER')),
+  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE medicines (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name VARCHAR(150) NOT NULL,
+  manufacturer VARCHAR(150), composition VARCHAR(255), strength VARCHAR(50),
+  dosage_form VARCHAR(50), barcode VARCHAR(100),
+  low_stock_threshold INTEGER NOT NULL DEFAULT 0 CHECK (low_stock_threshold >= 0),
+  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_medicines_name ON medicines(name);
+CREATE INDEX idx_medicines_created_at ON medicines(created_at);
+CREATE TABLE suppliers (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name VARCHAR(150) NOT NULL, contact_person VARCHAR(100), phone VARCHAR(20),
+  email VARCHAR(150), address TEXT, gst_number VARCHAR(30),
+  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE purchases (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  supplier_id BIGINT NOT NULL REFERENCES suppliers(id),
+  invoice_number VARCHAR(100) NOT NULL, purchase_date DATE NOT NULL,
+  total_amount NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
+  status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED' CHECK (status IN ('COMPLETED','CANCELLED')),
+  created_by BIGINT NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(supplier_id, invoice_number)
+);
+CREATE TABLE batches (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  medicine_id BIGINT NOT NULL REFERENCES medicines(id),
+  batch_number VARCHAR(100) NOT NULL, expiry_date DATE NOT NULL,
+  current_quantity INTEGER NOT NULL DEFAULT 0 CHECK (current_quantity >= 0),
+  purchase_price NUMERIC(12,2) NOT NULL CHECK (purchase_price >= 0),
+  selling_price NUMERIC(12,2) NOT NULL CHECK (selling_price >= 0),
+  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','EXPIRED','INACTIVE')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(medicine_id, batch_number)
+);
+CREATE INDEX idx_batches_fefo ON batches(medicine_id, expiry_date)
+  WHERE current_quantity > 0 AND status='ACTIVE';
+CREATE TABLE purchase_items (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  purchase_id BIGINT NOT NULL REFERENCES purchases(id),
+  medicine_id BIGINT NOT NULL REFERENCES medicines(id),
+  batch_id BIGINT NOT NULL REFERENCES batches(id),
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  purchase_price NUMERIC(12,2) NOT NULL CHECK (purchase_price >= 0),
+  selling_price NUMERIC(12,2) NOT NULL CHECK (selling_price >= 0),
+  line_total NUMERIC(14,2) NOT NULL CHECK (line_total >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE sales (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  invoice_number VARCHAR(100) NOT NULL UNIQUE,
+  sale_date TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  total_amount NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
+  status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED' CHECK (status IN ('COMPLETED','CANCELLED')),
+  created_by BIGINT NOT NULL REFERENCES users(id),
+  cancellation_reason VARCHAR(255), cancelled_at TIMESTAMPTZ,
+  cancelled_by BIGINT REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE sale_items (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  sale_id BIGINT NOT NULL REFERENCES sales(id),
+  medicine_id BIGINT NOT NULL REFERENCES medicines(id),
+  batch_id BIGINT NOT NULL REFERENCES batches(id),
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  unit_price NUMERIC(12,2) NOT NULL CHECK (unit_price >= 0),
+  line_total NUMERIC(14,2) NOT NULL CHECK (line_total >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE stock_movements (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  batch_id BIGINT NOT NULL REFERENCES batches(id),
+  movement_type VARCHAR(40) NOT NULL CHECK (movement_type IN
+    
+('PURCHASE_IN','SALE_OUT','SALE_CANCEL_RESTORE','PURCHASE_CANCEL_OUT','MANUAL_IN','MANUAL_OUT','EXPIRED_WRITE_OFF')),
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  reference_type VARCHAR(30), reference_id BIGINT,
+  created_by BIGINT NOT NULL REFERENCES users(id),
+  notes VARCHAR(255), created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

@@ -1,0 +1,644 @@
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+PHARMACY MANAGEMENT SYSTEM
+AI Agent Implementation Playbook
+Java + Spring Boot | React + TypeScript | PostgreSQL | Redis | RabbitMQ | Docker
+Purpose: provide an executable, end-to-end plan that a coding agent can follow on a local machine to produce 
+a working V1 and then harden it toward production.
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+1. How an AI coding agent should use this document
+ Execute phases in order. Do not skip acceptance criteria.
+ Keep the application deployable after every phase; commit working increments.
+ Use a modular monolith first. Do not introduce microservices until load, organizational boundaries, or 
+independent deployment needs justify them.
+ All stock-changing operations must be transactional and auditable.
+ Do not store plaintext passwords, secrets, or production credentials in source control.
+ Prefer database correctness over cache correctness: PostgreSQL is the system of record; Redis is disposable 
+acceleration state.
+2. Target stack and baseline
+Layer Choice Notes
+Backend Java 21+ and Spring Boot 4.1.1
+Use Maven. Spring Web, Validation, 
+Security, Data JPA, Actuator, Cache, 
+AMQP.
+Frontend React 19.3 + TypeScript + Vite React Router, TanStack Query, React 
+Hook Form, Zod.
+Database PostgreSQL 18 Primary system of record. Use Flyway 
+migrations.
+Cache Redis 8.x
+Read cache, rate-limit counters, short-
+lived metadata. Never authoritative for 
+stock.
+Messaging RabbitMQ Alerts, report generation, non-critical 
+async work.
+Observability Spring Actuator + 
+Micrometer/OpenTelemetry
+Prometheus/Grafana locally; structured 
+JSON logs.
+Containers Docker + Docker Compose Local parity and reproducible setup.
+Testing JUnit 5, Testcontainers, React Testing 
+Library, Playwright Unit, integration, concurrency, E2E.
+Version note: this playbook uses stable releases current in September 2026 where explicitly named. Keep 
+dependencies on supported stable/LTS lines when implementing later.
+3. V1 functional scope
+Module V1 behavior
+Medicines Master-record table; filter by medicine name and entry date; 
+create when missing; edit each row; active/inactive status.
+Suppliers Create, list, search, edit, activate/inactivate.
+Purchases
+Create supplier invoice with multiple medicine lines; create 
+missing medicine inline; batch, expiry, quantity, 
+purchase/selling price; stock increases atomically.
+Inventory Current stock, low stock, out-of-stock, near-expiry, expired, 
+batch-level drill-down.
+Sales Create sale, FEFO allocation across batches, prevent 
+expired/insufficient stock, generate bill, history.
+Cancellation Cancel completed sale, restore exact batch quantities, record 
+reason; never hard-delete transaction history.
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+Dashboard Today sales, bill count, low-stock count, near-expiry count, 
+expired stock count.
+Reports Sales, purchases, stock, date-range filters; export can be later 
+hardening.
+4. Non-functional requirements
+ Correctness: no negative stock; no expired batch sale; duplicate concurrent sale must not oversell.
+ Atomicity: purchase, sale, cancellation and stock adjustments either fully commit or fully roll back.
+ Auditability: every stock mutation creates a stock_movement record.
+ Security: authenticated APIs, role-based authorization, password hashing, input validation and least 
+privilege.
+ Performance: indexed high-frequency queries; cache only suitable reads; paginate large tables.
+ Operability: health checks, metrics, logs, tracing IDs, backups and documented recovery.
+ Scalability: stateless API instances; shared PostgreSQL/Redis/RabbitMQ; horizontal scale when needed.
+5. Domain model and relationships
+Core entities: User, Medicine, Supplier, Purchase, PurchaseItem, Batch, Sale, SaleItem, StockMovement.
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+Supplier 1 ---- * Purchase 1 ---- * PurchaseItem * ---- 1 Medicine
+                                         |
+                                         + ---- 1 Batch
+Medicine 1 ---- * Batch 1 ---- * StockMovement
+Sale     1 ---- * SaleItem ---- 1 Batch / 1 Medicine
+User     1 ---- * Purchases and Sales created by that user
+6. Database schema
+Use Flyway. Create migration V1__initial_schema.sql with the schema below. Keep the SQL in source control and 
+never modify an already-applied production migration; add a new migration instead.
+CREATE TABLE users (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  email VARCHAR(150) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  role VARCHAR(20) NOT NULL CHECK (role IN ('OWNER','CASHIER')),
+  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE medicines (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name VARCHAR(150) NOT NULL,
+  manufacturer VARCHAR(150), composition VARCHAR(255), strength VARCHAR(50),
+  dosage_form VARCHAR(50), barcode VARCHAR(100),
+  low_stock_threshold INTEGER NOT NULL DEFAULT 0 CHECK (low_stock_threshold >= 0),
+  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_medicines_name ON medicines(name);
+CREATE INDEX idx_medicines_created_at ON medicines(created_at);
+CREATE TABLE suppliers (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name VARCHAR(150) NOT NULL, contact_person VARCHAR(100), phone VARCHAR(20),
+  email VARCHAR(150), address TEXT, gst_number VARCHAR(30),
+  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE purchases (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  supplier_id BIGINT NOT NULL REFERENCES suppliers(id),
+  invoice_number VARCHAR(100) NOT NULL, purchase_date DATE NOT NULL,
+  total_amount NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
+  status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED' CHECK (status IN ('COMPLETED','CANCELLED')),
+  created_by BIGINT NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(supplier_id, invoice_number)
+);
+CREATE TABLE batches (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  medicine_id BIGINT NOT NULL REFERENCES medicines(id),
+  batch_number VARCHAR(100) NOT NULL, expiry_date DATE NOT NULL,
+  current_quantity INTEGER NOT NULL DEFAULT 0 CHECK (current_quantity >= 0),
+  purchase_price NUMERIC(12,2) NOT NULL CHECK (purchase_price >= 0),
+  selling_price NUMERIC(12,2) NOT NULL CHECK (selling_price >= 0),
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','EXPIRED','INACTIVE')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(medicine_id, batch_number)
+);
+CREATE INDEX idx_batches_fefo ON batches(medicine_id, expiry_date)
+  WHERE current_quantity > 0 AND status='ACTIVE';
+CREATE TABLE purchase_items (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  purchase_id BIGINT NOT NULL REFERENCES purchases(id),
+  medicine_id BIGINT NOT NULL REFERENCES medicines(id),
+  batch_id BIGINT NOT NULL REFERENCES batches(id),
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  purchase_price NUMERIC(12,2) NOT NULL CHECK (purchase_price >= 0),
+  selling_price NUMERIC(12,2) NOT NULL CHECK (selling_price >= 0),
+  line_total NUMERIC(14,2) NOT NULL CHECK (line_total >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE sales (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  invoice_number VARCHAR(100) NOT NULL UNIQUE,
+  sale_date TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  total_amount NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
+  status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED' CHECK (status IN ('COMPLETED','CANCELLED')),
+  created_by BIGINT NOT NULL REFERENCES users(id),
+  cancellation_reason VARCHAR(255), cancelled_at TIMESTAMPTZ,
+  cancelled_by BIGINT REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE sale_items (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  sale_id BIGINT NOT NULL REFERENCES sales(id),
+  medicine_id BIGINT NOT NULL REFERENCES medicines(id),
+  batch_id BIGINT NOT NULL REFERENCES batches(id),
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  unit_price NUMERIC(12,2) NOT NULL CHECK (unit_price >= 0),
+  line_total NUMERIC(14,2) NOT NULL CHECK (line_total >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE stock_movements (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  batch_id BIGINT NOT NULL REFERENCES batches(id),
+  movement_type VARCHAR(40) NOT NULL CHECK (movement_type IN
+    
+('PURCHASE_IN','SALE_OUT','SALE_CANCEL_RESTORE','PURCHASE_CANCEL_OUT','MANUAL_IN','MANUAL_OUT','EXPIR
+ED_WRITE_OFF')),
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  reference_type VARCHAR(30), reference_id BIGINT,
+  created_by BIGINT NOT NULL REFERENCES users(id),
+  notes VARCHAR(255), created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+7. Repository layout
+pharmacy-system/
+  backend/
+    pom.xml
+    src/main/java/com/example/pharmacy/
+      PharmacyApplication.java
+      config/
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+      auth/
+      user/
+      medicine/
+      supplier/
+      purchase/
+      inventory/
+      sale/
+      stock/
+      reporting/
+      common/
+    src/main/resources/
+      application.yml
+      db/migration/V1__initial_schema.sql
+    src/test/
+  frontend/
+    package.json
+    src/
+      app/
+      api/
+      components/
+      features/
+        auth/ medicines/ suppliers/ purchases/ inventory/ sales/ dashboard/ reports/
+      routes/
+      types/
+  infra/
+    docker-compose.yml
+    prometheus.yml
+    grafana/
+  .env.example
+  README.md
+  Makefile (optional)
+8. Backend bootstrap
+Create Spring Boot project with:
+- Spring Web
+- Spring Validation
+- Spring Security
+- Spring Data JPA
+- PostgreSQL Driver
+- Flyway Migration
+- Spring Cache
+- Spring Data Redis
+- Spring AMQP
+- Spring Boot Actuator
+- Micrometer Prometheus / OpenTelemetry
+- Testcontainers PostgreSQL
+- Lombok optional (do not rely on it for domain semantics)
+8.1 Layering rule
+controller -> application/service -> repository -> database
+                    |
+                    +-> domain rules
+Controllers: HTTP only
+Services: transactions/business logic
+Repositories: persistence queries/locks
+Entities: persistence state
+DTOs: API boundary; never expose JPA entities directly
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+9. API contract
+Area Method + route Purpose
+Auth POST /api/auth/login Authenticate; return secure session/JWT 
+according to implementation choice.
+Medicines GET /api/medicines?
+name=&from=&to=&page= Paged master list and filters.
+Medicines POST /api/medicines Create master medicine.
+Medicines PUT /api/medicines/{id} Edit master medicine.
+Suppliers GET/POST/PUT /api/suppliers Supplier maintenance.
+Purchases POST /api/purchases Atomic purchase + stock entry.
+Purchases GET /api/purchases/{id} Invoice detail.
+Inventory GET /api/inventory Current stock.
+Inventory GET /api/inventory/low-stock Below threshold.
+Inventory GET /api/inventory/near-expiry?days=30 Near-expiry batches.
+Sales POST /api/sales Atomic FEFO sale.
+Sales POST /api/sales/{id}/cancel Restore exact batches and mark 
+cancelled.
+Dashboard GET /api/dashboard/summary Summary cards.
+Reports GET /api/reports/sales|purchases|stock Date-range reporting.
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+10. Critical transaction 1 - Create Purchase
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+@Transactional
+createPurchase(request, userId):
+  validate supplier is active
+  insert purchase header
+  total = 0
+  for item in request.items:
+    validate medicine active
+    batch = find batch by (medicineId, batchNumber)
+    if missing: create with expiry/prices/currentQuantity=0
+    else: verify expiry/pricing policy for existing batch
+    insert purchase_item
+    increment batch.currentQuantity by item.quantity
+    insert stock_movement(PURCHASE_IN, item.quantity, PURCHASE, purchaseId)
+    total += purchasePrice * quantity
+  update purchase.totalAmount
+  return purchase detail
+Acceptance:
+- Failure on any line leaves no purchase, item, batch increment or stock movement partially 
+committed.
+- Duplicate supplier invoice returns 409.
+- Quantity <= 0 or invalid price returns 400.
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+11. Critical transaction 2 - Create Sale with FEFO + row locking
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+Repository query concept:
+SELECT *
+FROM batches
+WHERE medicine_id = :medicineId
+  AND current_quantity > 0
+  AND status = 'ACTIVE'
+  AND expiry_date >= CURRENT_DATE
+ORDER BY expiry_date ASC, id ASC
+FOR UPDATE;
+@Transactional
+createSale(request, userId):
+  insert sale header (or reserve invoice id inside transaction)
+  for requested medicine + quantity:
+    lock eligible batches using FEFO query
+    if sum(available) < requested quantity: throw InsufficientStock -> rollback
+    remaining = requested quantity
+    for batch in locked batches until remaining == 0:
+      take = min(batch.currentQuantity, remaining)
+      insert sale_item(batchId, take, sellingPrice)
+      decrement batch.currentQuantity
+      insert stock_movement(SALE_OUT, take, SALE, saleId)
+      remaining -= take
+  calculate sale total from persisted sale_items
+  commit
+Why FOR UPDATE:
+Two cashiers selling the same last units must serialize on the affected batch rows.
+The second transaction sees the updated quantity after the first commits.
+12. Critical transaction 3 - Cancel Sale
+@Transactional
+cancelSale(saleId, reason, userId):
+  load sale FOR UPDATE
+  require status == COMPLETED
+  load sale_items
+  lock all referenced batches in deterministic id order
+  for item:
+    increment batch.currentQuantity by item.quantity
+    insert stock_movement(SALE_CANCEL_RESTORE, item.quantity, SALE, saleId)
+  set sale.status=CANCELLED
+  set cancellation_reason, cancelled_at, cancelled_by
+Idempotency rule:
+A second cancellation request must not restore stock twice. Return current cancelled state or 409.
+13. Inventory query rules
+Current stock by medicine:
+SUM(batch.current_quantity) for active/non-expired batches, grouped by medicine.
+Low stock:
+SUM(current_quantity) <= medicine.low_stock_threshold.
+Out of stock:
+SUM(current_quantity) = 0.
+Near expiry:
+expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + :days.
+Expired:
+expiry_date < CURRENT_DATE AND current_quantity > 0.
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+Do not rely solely on batch.status='EXPIRED'; date is the authoritative expiry condition.
+A scheduled job may update status for convenience.
+14. Caching strategy
+Add Redis after correctness and baseline performance are working. Cache reads that are safe to be temporarily 
+stale; never use Redis as the authoritative stock count.
+Data Cache? TTL / invalidation
+Medicine master by id Yes 5-30 min; evict on medicine update.
+Supplier by id Yes 5-30 min; evict on update.
+Dashboard summary Yes, optional 15-60 sec; short TTL.
+Inventory available stock Usually no at first
+Stock is highly mutable; database query + 
+indexes first. If cached later, use short 
+TTL and explicit invalidation.
+Authentication/session Optional Depends on auth model.
+Rate-limit counters Yes Redis atomic INCR / token-bucket 
+implementation.
+Cache-aside pattern:
+1. Service checks Redis.
+2. Cache miss -> load PostgreSQL.
+3. Put value with TTL.
+4. On master-data mutation -> evict corresponding cache key.
+5. If Redis is down -> continue from PostgreSQL where possible.
+15. Messaging and background jobs
+RabbitMQ should be used only for work that does not need to complete before the user receives the core 
+transaction result.
+ Low-stock/expiry alert notifications
+ Daily report generation
+ Email delivery
+ Audit/export jobs
+ Scheduled expiry-status maintenance
+Transactional caution:
+Do not publish a message that claims a sale completed before the database transaction commits.
+For stronger guarantees, add an Outbox table in a later hardening phase:
+DB transaction -> business rows + outbox event -> commit -> publisher sends outbox -> marks sent.
+16. Security
+ Use Spring Security. Hash passwords with BCrypt/Argon2; never encrypt-and-recover passwords.
+ Roles: OWNER and CASHIER. Restrict user/admin settings and destructive actions to OWNER.
+ Validate request DTOs with Jakarta Validation and enforce DB constraints too.
+ Use HTTPS outside local development; secure cookies if cookie-based auth.
+ Protect against CSRF according to auth model; configure CORS to known frontend origins.
+ Never log passwords, tokens, full card/payment data or secrets.
+ Use environment variables/secret manager for DB credentials and signing secrets.
+ Implement rate limits on login and expensive endpoints.
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+ Use UUID/random invoice public IDs if sequential IDs should not be exposed externally.
+17. Frontend implementation
+React structure:
+- React Router: page routing
+- TanStack Query: server-state fetch/cache/invalidation
+- React Hook Form + Zod: forms and validation
+- Central API client: base URL, auth handling, problem-details errors
+- Feature folders: medicines, purchases, inventory, sales, dashboard, reports
+Do not mirror server state into a large global Redux store unless a real need appears.
+17.1 Required screens
+Route Screen
+/login Login
+/dashboard Summary + navigation
+/medicines Master table + name/date filters + create/edit
+/suppliers List/create/edit
+/purchases Purchase history
+/purchases/new Multi-line purchase entry
+/inventory Current/low/out/near-expiry/expired tabs
+/sales Sales history
+/sales/new POS-style sale creation
+/reports V1 reports
+18. Docker Compose local environment
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: pharmacy
+      POSTGRES_USER: pharmacy
+      POSTGRES_PASSWORD: pharmacy_dev
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+  redis:
+    image: redis:8
+    ports: ["6379:6379"]
+  rabbitmq:
+    image: rabbitmq:management
+    ports: ["5672:5672", "15672:15672"]
+  prometheus:
+    image: prom/prometheus
+    ports: ["9090:9090"]
+  grafana:
+    image: grafana/grafana
+    ports: ["3001:3000"]
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+volumes:
+  pgdata:
+The AI agent should add healthchecks, pinned image tags, non-default production credentials and separate 
+production configuration before deployment.
+19. Observability
+ Expose /actuator/health and /actuator/prometheus; do not publicly expose sensitive actuator endpoints.
+ Metrics: HTTP latency/error rate, DB pool usage, cache hit rate, RabbitMQ queue depth, sale/purchase 
+transaction latency.
+ Business metrics: sales completed/cancelled, low-stock count, expired-stock count, stock-adjustment count.
+ Structured logs with correlation/request ID, user ID (non-sensitive), transaction ID and exception code.
+ Distributed tracing becomes more valuable if workers or multiple services are introduced.
+20. Testing plan
+Level What to test
+Unit FEFO allocator, totals, validation, low-stock logic, cancellation 
+state machine.
+Repository Queries, unique constraints, FEFO ordering, row locks.
+Integration with Testcontainers Real PostgreSQL purchase/sale/cancel transactions.
+Concurrency Two transactions try to sell last stock; exactly one gets available 
+quantity.
+API Auth, validation, status codes, pagination, error contract.
+Frontend Forms, filters, loading/error states.
+E2E Login -> purchase -> inventory increase -> sale -> inventory 
+decrease -> cancellation restore.
+Load Sale API latency and DB contention under concurrent users; 
+identify real bottleneck before scaling.
+Mandatory concurrency test:
+Initial batch quantity = 1.
+Start two sale requests concurrently, each requesting quantity 1.
+Expected: one succeeds; the other returns insufficient stock/conflict.
+Final quantity = 0. Total SALE_OUT movement quantity = 1.
+21. Error contract and idempotency
+Return consistent errors, e.g. RFC 9457 Problem Details style:
+{
+  "type": "https://example/errors/insufficient-stock",
+  "title": "Insufficient stock",
+  "status": 409,
+  "detail": "Requested 8 units; only 5 sellable units remain",
+  "traceId": "..."
+}
+Idempotency:
+For create-sale/create-purchase calls from unreliable clients, optionally accept Idempotency-Key.
+Store key + request hash + resulting resource for a limited time.
+Same key + same request -> return prior result; same key + different body -> 409.
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+22. Scaling path
+Do not start with Kubernetes or microservices. Scale only after measurement shows a need.
+1. Stage 1 - Single Spring Boot instance + PostgreSQL. Redis/RabbitMQ optional but available via Compose.
+2. Stage 2 - Make API stateless, run multiple instances behind a reverse proxy/load balancer. Shared 
+PostgreSQL/Redis/RabbitMQ.
+3. Stage 3 - Tune DB pool, indexes and slow queries; introduce read replicas only for safe read workloads if 
+needed.
+4. Stage 4 - Separate worker processes for async jobs; scale workers based on queue depth.
+5. Stage 5 - Only then consider Kubernetes, managed services, partitioning, or service extraction.
+Scaling principle:
+HTTP/API instances can scale horizontally because business state is externalized.
+Stock correctness still depends on PostgreSQL transactions/locks, not on which API instance receives 
+a request.
+23. Production hardening checklist
+ Database backups: automated daily backup + point-in-time recovery where available; test restore.
+ Migrations: Flyway in deployment pipeline; backup before risky migration; backwards-compatible rollout 
+for zero-downtime changes.
+ Connection pools: HikariCP sane max sizes; do not overwhelm PostgreSQL by multiplying pods x pool size.
+ Indexes monitored using query plans and slow-query logs, not guessed indiscriminately.
+ Time zones: store timestamps in UTC/TIMESTAMPTZ, display local time in UI.
+ Money: NUMERIC/BigDecimal; never float/double for currency.
+ Pagination limits and maximum request sizes.
+ Retries only for transient/idempotent operations; exponential backoff with jitter.
+ Circuit breaking for external notification providers, not for local database correctness.
+ Graceful shutdown and readiness/liveness probes.
+ Secure headers, dependency/security scanning, container non-root user.
+ Backup and restore runbook; incident and rollback runbooks.
+24. CI/CD pipeline
+On every pull request:
+1. Backend compile + unit tests
+2. Frontend typecheck + lint + unit tests
+3. Integration tests with Testcontainers
+4. Build backend JAR and frontend bundle
+5. Dependency/security scan
+On main/release:
+6. Build versioned container images
+7. Run migration validation
+8. Deploy to staging
+9. E2E smoke test
+10. Manual/automated approval -> production
+11. Health verification and rollback on failure
+25. Phased execution plan for the AI agent
+Phase Definition of done
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+Phase 0 - Bootstrap
+Create repo, backend, frontend, Docker Compose, README, env 
+example. All containers start; backend health endpoint and 
+frontend shell work.
+Phase 1 - Database + auth
+Add Flyway V1 schema, JPA mappings, seed OWNER for local 
+dev, login/security. Integration test against PostgreSQL 
+container.
+Phase 2 - Medicine + Supplier CRUD/list/filter/validation; React tables/forms; active/inactive. 
+No inventory logic yet.
+Phase 3 - Purchase Implement atomic purchase flow and stock movements; 
+frontend multi-item form. Verify rollback tests.
+Phase 4 - Inventory Current/low/out/near-expiry/expired queries and UI tabs. Add 
+necessary indexes after query-plan inspection.
+Phase 5 - Sale Implement FEFO, SELECT FOR UPDATE, multi-batch sale items, 
+receipt response. Add mandatory concurrency test.
+Phase 6 - Cancellation Exact stock restoration; idempotency; audit trail; UI 
+cancellation with reason.
+Phase 7 - Dashboard + reports Summary queries and report filters. Add short-lived dashboard 
+cache if useful.
+Phase 8 - Redis + rate limiting Medicine/supplier cache-aside, login/API rate limits, fallback 
+behavior if Redis unavailable.
+Phase 9 - RabbitMQ + jobs Async alerts/reports; retry/DLQ policies; no core stock 
+transaction dependency on queue availability.
+Phase 10 - Observability Actuator, metrics, Prometheus/Grafana, structured logging, 
+trace/correlation IDs.
+Phase 11 - Quality Playwright E2E, concurrency/load tests, security checks, 
+backup/restore test.
+Phase 12 - Production packaging Docker images, reverse proxy/TLS, CI/CD, staging config, 
+deployment/runbook.
+26. Acceptance scenarios
+ Create a new medicine master; it appears in the medicine table and is editable.
+ Record a purchase with 3 medicines; all batches and movements appear and inventory increases.
+ A purchase fails on line 2; line 1 stock must not remain increased.
+ Sell 8 units when earliest batch has 5 and next batch has 20; sale creates two sale_items (5 + 3).
+ Try to sell an expired batch; it is never selected.
+ Two cashiers compete for the last unit; only one sale consumes it.
+ Cancel a sale; exact consumed batches are restored once, not twice.
+ Low-stock and near-expiry views reflect database state.
+ Redis outage does not corrupt inventory; master reads fall back to DB where designed.
+ RabbitMQ outage does not turn a committed sale into a failed sale; notification can retry later.
+ Restart application/containers; PostgreSQL data persists.
+ Run E2E journey from purchase to sale to cancellation successfully.
+27. AI-agent execution prompt
+The following block can be given to a capable local coding agent along with this PDF:
+You are implementing the Pharmacy Management System described in this playbook.
+Work directly in the local repository and complete phases sequentially.
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+Rules:
+1. Read the entire playbook before editing code.
+2. Do not skip database migrations, tests, or acceptance criteria.
+3. Use Java/Spring Boot for backend and React/TypeScript for frontend.
+4. PostgreSQL is authoritative for stock. Redis is never authoritative.
+5. Wrap purchase, sale and cancellation in database transactions.
+6. Implement FEFO sales using PostgreSQL row locking to prevent overselling.
+7. Every stock mutation writes a StockMovement record.
+8. Keep API instances stateless.
+9. Use Docker Compose for local PostgreSQL, Redis, RabbitMQ, Prometheus and Grafana.
+10. After each phase, run tests and leave the project in a working state.
+11. If a requirement is ambiguous, choose the simplest design consistent with this playbook and 
+document the decision in README/ADR rather than inventing unnecessary infrastructure.
+12. Do not introduce microservices or Kubernetes in V1.
+Deliverables:
+- Working backend and frontend
+- Flyway migrations
+- Docker Compose local stack
+- Automated tests including concurrency test
+- README with one-command local startup
+- API documentation (OpenAPI)
+- Seed/local development data
+- Observability configuration
+- CI pipeline definition
+- Production hardening notes and deployment runbook
+Start with Phase 0 and proceed until all acceptance scenarios pass.
+28. Definition of a ready V1 application
+ Fresh clone can start infrastructure and application using documented commands.
+ Owner can log in; medicine/supplier masters work.
+ Purchase increases batch stock and records audit movements atomically.
+ Inventory views are correct.
+ Sale uses FEFO, prevents overselling under concurrency, and records exact batches.
+ Sale cancellation restores exact stock once.
+ Dashboard/reports return correct summaries.
+ Health/metrics/logging are usable.
+ Core integration, concurrency and E2E tests pass.
+ No production secrets are committed; configuration is environment-driven.
+29. What is intentionally deferred beyond V1
+These can become commercial V2/V3 features after V1 is stable: multi-branch inventory, customers, 
+prescriptions, pharmacy regulatory workflows, purchase returns, customer returns, GST invoice specialization, 
+payment reconciliation, barcode scanner integration, supplier price intelligence, demand forecasting, SaaS 
+tenancy, billing/subscriptions, mobile app, advanced warehouse transfers.
+30. Reference versions / sources checked
+ Spring Boot project page: stable 4.1.1 as of September 2026 - https://spring.io/projects/spring-boot/
+ React 19.3 release (September 9, 2026) - https://react.dev/blog/2026/09/09/react-19-3
+Pharmacy Management System - AI Implementation Playbook
+Implementation guide - V1 + production hardening path
+ PostgreSQL release archive: PostgreSQL 18 stable line; PostgreSQL 19 still beta as of September 2026 - 
+https://www.postgresql.org/docs/release/
+ Redis stable/download and Redis 8 release documentation - https://redis.io/ and 
+https://download.redis.io/redis-stable/

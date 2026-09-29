@@ -1,0 +1,10 @@
+.tools
+.runtime
+.env
+backend/target
+frontend/node_modules
+frontend/dist
+frontend/package-lock.json
+frontend/playwright-report
+frontend/test-results
+docs/playbook.txt

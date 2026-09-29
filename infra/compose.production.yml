@@ -1,0 +1,27 @@
+# Merge with docker-compose.yml using Docker Compose >=2.24.4.
+# Example command is in docs/DEPLOYMENT.md. No cloud resources are created by this file.
+services:
+  backend:
+    environment:
+      SEED_DEMO: 'false'
+    ports: !reset []
+  frontend:
+    ports: !reset []
+  rabbitmq:
+    ports: !reset []
+  caddy:
+    image: caddy:2.10.2-alpine
+    ports: [80:80, 443:443]
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN to the public hostname}
+      TLS_EMAIL: ${TLS_EMAIL:?Set TLS_EMAIL for certificate notices}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      frontend: {condition: service_healthy}
+    restart: unless-stopped
+volumes:
+  caddydata:
+  caddyconfig:

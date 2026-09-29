@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ -d "$ROOT/.tools/node-v22.22.0-darwin-x64/bin" ]]; then export PATH="$ROOT/.tools/node-v22.22.0-darwin-x64/bin:$PATH"; fi
+exec npm --prefix "$ROOT/frontend" "$@"

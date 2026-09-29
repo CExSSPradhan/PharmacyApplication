@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+set -a
+source "$ROOT/.env"
+set +a
+export TEST_DB_URL=jdbc:postgresql://127.0.0.1:55432/pharmacy_test
+exec "$ROOT/scripts/mvn" test "$@"

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+set -a
+source "$ROOT/.env"
+set +a
+export PGPASSWORD="$DB_PASSWORD"
+PG_BIN="${PG_BIN:-/usr/local/opt/postgresql@16/bin}"
+RESTORE_DB="pharmacy_restore_check_$(date -u +%Y%m%d%H%M%S)"
+BACKUP_FILE="$("$ROOT/scripts/backup")"
+"$PG_BIN/createdb" -h 127.0.0.1 -p 55432 -U "$DB_USER" "$RESTORE_DB"
+"$PG_BIN/pg_restore" -h 127.0.0.1 -p 55432 -U "$DB_USER" -d "$RESTORE_DB" --no-owner --exit-on-error "$BACKUP_FILE"
+SOURCE_COUNTS="$("$PG_BIN/psql" -h 127.0.0.1 -p 55432 -U "$DB_USER" -d pharmacy -Atc 'SELECT (SELECT count(*) FROM medicines),(SELECT count(*) FROM sales),(SELECT count(*) FROM stock_movements)')"
+RESTORED_COUNTS="$("$PG_BIN/psql" -h 127.0.0.1 -p 55432 -U "$DB_USER" -d "$RESTORE_DB" -Atc 'SELECT (SELECT count(*) FROM medicines),(SELECT count(*) FROM sales),(SELECT count(*) FROM stock_movements)')"
+[[ "$SOURCE_COUNTS" == "$RESTORED_COUNTS" ]] || { echo 'Restore verification failed'; exit 1; }
+echo "Restore verified: $RESTORE_DB ($RESTORED_COUNTS). Backup: $BACKUP_FILE"
+echo 'The restored database is retained for inspection; production/local application data was not overwritten.'
