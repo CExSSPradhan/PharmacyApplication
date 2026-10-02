@@ -13,3 +13,8 @@ frontend/playwright-report/
 .DS_Store
 
 *.tsbuildinfo
+
+# Local Eclipse workspace metadata
+.project
+.classpath
+.settings/
