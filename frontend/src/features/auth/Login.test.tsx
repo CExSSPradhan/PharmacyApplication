@@ -10,16 +10,17 @@ describe('Login', () => {
   it('shows server errors without navigating', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue({
-          ok: false,
-          status: 401,
-          json: async () => ({ detail: 'Invalid email or password' }),
-        }),
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({ detail: 'Invalid email or password' }),
+      }),
     );
     const onLogin = vi.fn();
     render(<Login onLogin={onLogin} />);
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'user@example.test' },
+    });
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'wrong' } });
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await waitFor(() =>

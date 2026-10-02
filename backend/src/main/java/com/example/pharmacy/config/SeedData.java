@@ -28,8 +28,14 @@ public class SeedData {
   ) {
     return args -> {
       if (db.number("SELECT count(*) FROM users") == 0) {
-        if (password.length() < 12) throw new IllegalStateException(
-          "Set OWNER_PASSWORD to at least 12 characters for first startup"
+        if (!email.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")) throw new IllegalStateException(
+          "Set OWNER_EMAIL to a valid email for first startup"
+        );
+        if (
+          password.length() < 12 ||
+          password.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 72
+        ) throw new IllegalStateException(
+          "Set OWNER_PASSWORD to 12 or more characters and at most 72 UTF-8 bytes for first startup"
         );
         db.update(
           "INSERT INTO users(name,email,password_hash,role) VALUES (?,?,?,'OWNER')",

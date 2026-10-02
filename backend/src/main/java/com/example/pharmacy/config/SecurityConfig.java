@@ -39,7 +39,9 @@ public class SecurityConfig {
     Store db,
     StringRedisTemplate redis,
     @Value("${app.redis-enabled}") boolean redisEnabled,
-    @Value("${METRICS_TOKEN:}") String metricsToken
+    @Value("${app.metrics-token}") String metricsToken,
+    @Value("${app.login-rate-limit}") int loginLimit,
+    @Value("${app.api-rate-limit}") int apiLimit
   ) throws Exception {
     var filter = new OncePerRequestFilter() {
       @Override
@@ -80,7 +82,7 @@ public class SecurityConfig {
             String bucket = login
               ? "login:" + AuthService.hash(req.getRemoteAddr())
               : "api:" + user.id();
-            int limit = login ? 20 : 600;
+            int limit = login ? loginLimit : apiLimit;
             long count;
             try {
               if (!redisEnabled) throw new IllegalStateException();

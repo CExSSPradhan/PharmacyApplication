@@ -69,3 +69,13 @@ Schedule encrypted daily backups outside the host and test recovery. For product
 5. Re-run health checks, authentication and a controlled transaction smoke test before resuming traffic.
 
 Outstanding production work: trusted-proxy login limits, tighter DB roles, password lifecycle, dependency/image scans on CI, real Redis/broker outage tests, observability tuning, load measurements, monitoring alerts, image digest pinning, retention policies and off-host/PITR backup policy. AWS deployment is intentionally a later user-reviewed step.
+
+## Application configuration
+
+Backend settings live in `backend/src/main/resources/application.properties`.
+`application-prod.properties` is activated by `SPRING_PROFILES_ACTIVE=prod`; the production Compose overlay sets this automatically.
+Copy `.env.production.example` to an untracked `.env` on the deployment host and populate every required value. Do not commit real credentials to properties files. Spring also supports external `config/application.properties` and `config/application-prod.properties`; restrict access to any files containing secrets.
+
+Production startup rejects missing database credentials, short database or metrics secrets, demo seeding, and missing host/authentication settings for enabled Redis and RabbitMQ services. Owner email and password are required only when bootstrapping an empty users table. Use at least 12 password characters and at most 72 UTF-8 bytes; remove the bootstrap password from the deployment environment after the owner is created. Changing this value does not reset an existing owner's password.
+
+Session lifetime (`SESSION_TTL`), cache lifetime (`CACHE_TTL`), per-minute login/API limits (`LOGIN_RATE_LIMIT`, `API_RATE_LIMIT`), and job intervals in milliseconds (`OUTBOX_PUBLISH_DELAY`, `MAINTENANCE_DELAY`) can be changed through environment variables or the corresponding `app.*` properties. Secrets belong only on the server; never expose them through frontend build variables.

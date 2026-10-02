@@ -15,15 +15,21 @@ public class ReadCache {
   private final StringRedisTemplate redis;
   private final ObjectMapper json;
   private final boolean enabled;
+  private final Duration ttl;
 
   public ReadCache(
     StringRedisTemplate redis,
     ObjectMapper json,
-    @Value("${app.redis-enabled}") boolean enabled
+    @Value("${app.redis-enabled}") boolean enabled,
+    @Value("${app.cache-ttl}") Duration ttl
   ) {
     this.redis = redis;
     this.json = json;
     this.enabled = enabled;
+    if (ttl.isZero() || ttl.isNegative()) throw new IllegalArgumentException(
+      "app.cache-ttl must be positive"
+    );
+    this.ttl = ttl;
   }
 
   @SuppressWarnings("unchecked")
@@ -34,7 +40,7 @@ public class ReadCache {
     } catch (Exception ignored) {}
     var data = source.get();
     if (enabled) try {
-      redis.opsForValue().set(key, json.writeValueAsString(data), Duration.ofMinutes(5));
+      redis.opsForValue().set(key, json.writeValueAsString(data), ttl);
     } catch (Exception ignored) {}
     return data;
   }

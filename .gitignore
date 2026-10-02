@@ -3,6 +3,7 @@
 .env
 .env.*
 !.env.example
+!.env.production.example
 !*.env.example
 backend/target/
 frontend/node_modules/
@@ -18,3 +19,8 @@ frontend/playwright-report/
 .project
 .classpath
 .settings/
+
+# External deployment configuration may contain secrets
+/config/*.properties
+/config/*.yml
+/config/*.yaml

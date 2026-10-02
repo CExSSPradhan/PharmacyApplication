@@ -26,7 +26,7 @@ public class BackgroundJobs {
     this.enabled = enabled;
   }
 
-  @Scheduled(fixedDelay = 10000)
+  @Scheduled(fixedDelayString = "${app.outbox-publish-delay}")
   @Transactional
   public void publish() {
     if (!enabled) return;
@@ -60,7 +60,7 @@ public class BackgroundJobs {
     }
   }
 
-  @Scheduled(fixedDelay = 3600000)
+  @Scheduled(fixedDelayString = "${app.maintenance-delay}")
   public void maintenance() {
     db.update("DELETE FROM auth_tokens WHERE expires_at<now()");
     db.update("DELETE FROM rate_limits WHERE window_end<now()-interval '1 day'");

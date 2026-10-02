@@ -3,7 +3,9 @@ package com.example.pharmacy.auth;
 import com.example.pharmacy.common.*;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
+import java.time.Duration;
 import java.util.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,9 +18,21 @@ public class AuthService {
   private final Store db;
   private final PasswordEncoder passwords;
 
-  public AuthService(Store db, PasswordEncoder passwords) {
+  private final String dummyHash;
+  private final Duration sessionTtl;
+
+  public AuthService(
+    Store db,
+    PasswordEncoder passwords,
+    @Value("${app.session-ttl}") Duration sessionTtl
+  ) {
     this.db = db;
     this.passwords = passwords;
+    if (sessionTtl.isZero() || sessionTtl.isNegative()) throw new IllegalArgumentException(
+      "app.session-ttl must be positive"
+    );
+    this.sessionTtl = sessionTtl;
+    this.dummyHash = passwords.encode(UUID.randomUUID().toString());
   }
 
   public static String hash(String value) {
@@ -45,8 +59,7 @@ public class AuthService {
       "SELECT * FROM users WHERE lower(email)=lower(?) AND status='ACTIVE'",
       input.email()
     );
-    String dummy = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
-    String encoded = rows.isEmpty() ? dummy : rows.getFirst().get("password_hash").toString();
+    String encoded = rows.isEmpty() ? dummyHash : rows.getFirst().get("password_hash").toString();
     if (!passwords.matches(input.password(), encoded) || rows.isEmpty()) throw new ApiException(
       401,
       "Invalid email or password"
@@ -55,9 +68,10 @@ public class AuthService {
     new SecureRandom().nextBytes(bytes);
     String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     db.update(
-      "INSERT INTO auth_tokens(token_hash,user_id,expires_at) VALUES (?,?,now()+interval '8 hours')",
+      "INSERT INTO auth_tokens(token_hash,user_id,expires_at) VALUES (?,?,now()+(? * interval '1 millisecond'))",
       hash(token),
-      Store.id(rows.getFirst())
+      Store.id(rows.getFirst()),
+      sessionTtl.toMillis()
     );
     return Map.of("token", token, "user", principal(rows.getFirst()));
   }

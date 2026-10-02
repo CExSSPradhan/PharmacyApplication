@@ -26,17 +26,21 @@ import tools.jackson.databind.ObjectMapper;
   webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
   properties = {
     "app.seed-demo=false",
-    "app.owner-password=Testing-password-2026",
+    "app.owner-email=owner@pharmacy.local",
     "app.redis-enabled=false",
     "app.messaging-enabled=false",
   }
 )
+@org.springframework.test.context.ActiveProfiles("prod")
 class StockIntegrationTest {
 
+  static final String TEST_PASSWORD = UUID.randomUUID().toString();
   static PostgreSQLContainer postgres;
 
   @DynamicPropertySource
   static void database(DynamicPropertyRegistry r) {
+    r.add("app.owner-password", () -> TEST_PASSWORD);
+    r.add("app.metrics-token", () -> UUID.randomUUID().toString());
     String url = System.getenv("TEST_DB_URL");
     if (url != null) {
       if (!url.endsWith("/pharmacy_test")) throw new IllegalStateException(
@@ -84,7 +88,7 @@ class StockIntegrationTest {
     );
     user = db.insert(
       "INSERT INTO users(name,email,password_hash,role) VALUES ('Owner','owner@test.local',?,'OWNER')",
-      passwords.encode("Testing-password-2026")
+      passwords.encode(TEST_PASSWORD)
     );
     supplier = Store.id(
       masters.supplier(null, new Inputs.Supplier("Supplier", "", "", "", "", "", "ACTIVE"))
@@ -331,7 +335,7 @@ class StockIntegrationTest {
     var response = http(
       "/api/auth/login",
       "POST",
-      "{\"email\":\"" + email + "\",\"password\":\"Testing-password-2026\"}",
+      "{\"email\":\"" + email + "\",\"password\":\"" + TEST_PASSWORD + "\"}",
       null
     );
     assertEquals(200, response.statusCode(), response.body());
@@ -361,7 +365,7 @@ class StockIntegrationTest {
   void cashierCannotModifyMastersOrCancel() throws Exception {
     db.update(
       "INSERT INTO users(name,email,password_hash,role) VALUES ('Cashier','cashier@test.local',?,'CASHIER')",
-      passwords.encode("Testing-password-2026")
+      passwords.encode(TEST_PASSWORD)
     );
     String token = login("cashier@test.local");
     assertEquals(

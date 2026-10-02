@@ -3,6 +3,7 @@
 services:
   backend:
     environment:
+      SPRING_PROFILES_ACTIVE: prod
       SEED_DEMO: 'false'
     ports: !reset []
   frontend:

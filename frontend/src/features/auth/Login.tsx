@@ -14,7 +14,7 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
     formState: { errors, isSubmitting },
   } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { email: 'owner@pharmacy.local', password: '' },
+    defaultValues: { email: '', password: '' },
   });
   return (
     <main className="login">

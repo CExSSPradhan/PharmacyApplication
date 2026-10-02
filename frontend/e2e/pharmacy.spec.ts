@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test';
-const email = process.env.OWNER_EMAIL || 'owner@pharmacy.local';
+const email = process.env.OWNER_EMAIL;
 const password = process.env.OWNER_PASSWORD;
 test.beforeEach(async ({ page }) => {
-  if (!password) throw new Error('OWNER_PASSWORD must be configured');
+  if (!email || !password) throw new Error('OWNER_EMAIL and OWNER_PASSWORD must be configured');
   await page.goto('/login');
   await page.getByLabel('Email address').fill(email);
   await page.getByLabel('Password', { exact: true }).fill(password);
