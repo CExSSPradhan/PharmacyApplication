@@ -21,6 +21,8 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 @Configuration
@@ -40,6 +42,7 @@ public class SecurityConfig {
     StringRedisTemplate redis,
     @Value("${app.redis-enabled}") boolean redisEnabled,
     @Value("${app.metrics-token}") String metricsToken,
+    @Value("${app.frontend-origin}") String frontendOrigin,
     @Value("${app.login-rate-limit}") int loginLimit,
     @Value("${app.api-rate-limit}") int apiLimit
   ) throws Exception {
@@ -113,7 +116,16 @@ public class SecurityConfig {
         }
       }
     };
+    var corsSource = new UrlBasedCorsConfigurationSource();
+    if (!frontendOrigin.isBlank()) {
+      var cors = new CorsConfiguration();
+      cors.setAllowedOrigins(List.of(frontendOrigin));
+      cors.setAllowedMethods(List.of("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"));
+      cors.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+      corsSource.registerCorsConfiguration("/api/**", cors);
+    }
     return http
+      .cors(c -> c.configurationSource(corsSource))
       .csrf(c -> c.disable())
       .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
       .authorizeHttpRequests(a ->

@@ -7,9 +7,11 @@ export type Page = {
   totalAmount?: number;
 };
 export type User = { id: number; name: string; email: string; role: 'OWNER' | 'CASHIER' };
+const apiOrigin = (import.meta.env.VITE_API_ORIGIN || '').replace(/\/+$/, '');
+
 export async function api<T = any>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const token = sessionStorage.getItem('pharmacy-token');
-  const response = await fetch(`/api${path}`, {
+  const response = await fetch(`${apiOrigin}/api${path}`, {
     method,
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),

@@ -27,6 +27,7 @@ import tools.jackson.databind.ObjectMapper;
   properties = {
     "app.seed-demo=false",
     "app.owner-email=owner@pharmacy.local",
+    "app.frontend-origin=https://pharmacy.example.com",
     "app.redis-enabled=false",
     "app.messaging-enabled=false",
   }
@@ -80,6 +81,29 @@ class StockIntegrationTest {
   ObjectMapper json;
 
   long user, supplier, medicine;
+
+  @Test
+  void corsAllowsOnlyTheConfiguredFrontend() throws Exception {
+    var client = HttpClient.newHttpClient();
+    var endpoint = URI.create(
+      "http://localhost:" + env.getProperty("local.server.port") + "/api/auth/login"
+    );
+    for (String origin : List.of("https://pharmacy.example.com", "https://other.example.com")) {
+      var request = HttpRequest.newBuilder(endpoint)
+        .header("Origin", origin)
+        .header("Access-Control-Request-Method", "POST")
+        .header("Access-Control-Request-Headers", "content-type,authorization")
+        .method("OPTIONS", HttpRequest.BodyPublishers.noBody())
+        .build();
+      var response = client.send(request, HttpResponse.BodyHandlers.discarding());
+      boolean allowed = origin.equals("https://pharmacy.example.com");
+      assertEquals(allowed ? 200 : 403, response.statusCode());
+      assertEquals(
+        allowed ? Optional.of(origin) : Optional.empty(),
+        response.headers().firstValue("Access-Control-Allow-Origin")
+      );
+    }
+  }
 
   @BeforeEach
   void setup() {

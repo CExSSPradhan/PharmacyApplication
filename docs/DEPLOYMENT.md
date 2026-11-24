@@ -79,3 +79,25 @@ Copy `.env.production.example` to an untracked `.env` on the deployment host and
 Production startup rejects missing database credentials, short database or metrics secrets, demo seeding, and missing host/authentication settings for enabled Redis and RabbitMQ services. Owner email and password are required only when bootstrapping an empty users table. Use at least 12 password characters and at most 72 UTF-8 bytes; remove the bootstrap password from the deployment environment after the owner is created. Changing this value does not reset an existing owner's password.
 
 Session lifetime (`SESSION_TTL`), cache lifetime (`CACHE_TTL`), per-minute login/API limits (`LOGIN_RATE_LIMIT`, `API_RATE_LIMIT`), and job intervals in milliseconds (`OUTBOX_PUBLISH_DELAY`, `MAINTENANCE_DELAY`) can be changed through environment variables or the corresponding `app.*` properties. Secrets belong only on the server; never expose them through frontend build variables.
+## Free-tier cloud deployment
+
+This setup runs the Vite frontend on Cloudflare Pages, the Spring Boot API on Render, and PostgreSQL on Supabase. Use the same Git branch for both builds. For an existing pharmacy database, restore the application data before starting Render. A fresh project runs Flyway and creates the first owner at startup.
+
+1. Create a Free Supabase project in Singapore. In **Connect**, select the **Session pooler** on port `5432`. Set the Render values below using its host, username, and database password. Disable the Data API in the Supabase dashboard because the app uses JDBC. [Supabase Spring Boot guide](https://supabase.com/docs/guides/getting-started/quickstarts/spring-boot) · [Data API settings](https://supabase.com/docs/guides/api/securing-your-api#disable-the-data-api)
+2. Create a private Supabase Storage bucket named `pharmacy-files` if you need to keep files in Supabase. The current app has no file upload or retrieval feature. Billing records live in PostgreSQL. [Supabase buckets](https://supabase.com/docs/guides/storage/buckets/fundamentals)
+3. Choose a Cloudflare Pages project name and reserve its `pages.dev` hostname, or use the hostname of an existing project. On Render, create a Blueprint from this repository using `render.yaml`. Supply the environment variables below in Render. [Render Blueprints](https://render.com/docs/infrastructure-as-code)
+4. In the Cloudflare Pages project, connect the Git repository. Set the root directory to `frontend`, build command to `npm run build`, and output directory to `dist`. Set `NODE_VERSION=22` and `VITE_API_ORIGIN=https://YOUR-SERVICE.onrender.com` for the production build. Use the actual HTTPS URL assigned by Render. If the assigned Pages hostname differs from the one entered on Render, update `FRONTEND_ORIGIN` on Render. [Cloudflare Pages build configuration](https://developers.cloudflare.com/pages/configuration/build-configuration/)
+5. Check that `/actuator/health/readiness` on Render reports `UP`. From the Pages URL, sign in with the owner account and verify a read and a write using test data. Confirm the result persists after a reload.
+
+| Render variable | Value |
+| --- | --- |
+| `DB_URL` | `jdbc:postgresql://POOLER_HOST:5432/postgres?sslmode=require` |
+| `DB_USER` | Session pooler username, such as `postgres.PROJECT_REF` |
+| `DB_PASSWORD` | Supabase database password |
+| `OWNER_EMAIL` | Owner email for a fresh database |
+| `OWNER_PASSWORD` | Initial owner password, at least 12 characters and at most 72 UTF-8 bytes |
+| `FRONTEND_ORIGIN` | Exact production Pages origin, such as `https://pharmacy-billing.pages.dev`, with no trailing slash |
+
+Keep passwords in the Render dashboard. The Cloudflare build needs only the public API URL. This deployment reads directly from PostgreSQL and uses it for rate limiting. RabbitMQ-driven background notifications are disabled.
+
+Render Free spins down after 15 minutes without traffic, and a cold start can take about a minute. Supabase Free includes a 500 MB database and 1 GB of file storage, can pause after low activity, and requires you to manage your own database backups. [Render Free limits](https://render.com/docs/free) · [Supabase pricing](https://supabase.com/pricing)
